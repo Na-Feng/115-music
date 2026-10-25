@@ -1,0 +1,19 @@
+# Gradle / 构建
+.gradle/
+build/
+app/build/
+.kotlin/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本地产物与调试素材（APK 以 Release 附件形式分发，不入库）
+*.apk
+qr-login.png
+歌曲/
+
+# Claude Code 本地目录
+.claude/
