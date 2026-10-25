@@ -23,8 +23,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 安装 Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest 运行器已预装 Android SDK 且许可已接受，无需 setup-android
 
       - name: 构建 APK
         run: ./gradlew assembleDebug --no-daemon
