@@ -50,6 +50,17 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 安装到电视：U盘侧载 / `adb connect <TV-IP>:5555` 后 `adb install -r`。覆盖安装后桌面图标若显示旧图，重启盒子刷新启动器缓存。
 
+### 自动发布
+
+已配置 GitHub Actions（`.github/workflows/release.yml`）：推送 `v*` 标签即自动构建并把 APK 发布为 GitHub Release：
+
+```bash
+git tag v0.4.8
+git push origin v0.4.8
+```
+
+到仓库 **Actions** 页可看构建进度，完成后 **Releases** 里就有 `115-music-v0.4.8.apk` 可直接下载安装。
+
 ## 技术要点（2026-10 实测）
 
 - 列表：`GET webapi.115.com/files?aid=1&cid={目录}&o=user_ptime&asc=0&offset=&show_dir=1&limit=40&format=json`；搜索为独立端点 `/files/search`（同参数 + `search_value=`；`/files?search_value=` 会被服务端静默忽略）
