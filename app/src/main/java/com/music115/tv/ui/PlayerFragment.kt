@@ -1,20 +1,15 @@
 package com.music115.tv.ui
 
+import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
-import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.SpannableStringBuilder
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
-import android.text.style.StyleSpan
 import android.view.KeyEvent
 import android.view.View
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.ImageView
-import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -22,6 +17,8 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.Player
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.music115.tv.App
 import com.music115.tv.R
 import com.music115.tv.data.Lyrics
@@ -29,19 +26,24 @@ import com.music115.tv.playback.TrackMetadata
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-/** 全屏播放页：封面、进度（遥控左右键 ±10s）、走带控制、循环模式 */
+/**
+ * 全屏播放页：封面、歌词、进度、走带控制、循环模式。
+ * 遥控交互：进页默认焦点在进度条 —— ←→ 快退/快进（按住加速，松手才真正 seek），
+ * OK 播放/暂停，↓ 进入按钮行。
+ */
 class PlayerFragment : Fragment(R.layout.fragment_player) {
 
     private val locator by lazy { (requireActivity().application as App).locator }
     private val manager get() = locator.playerManager
 
     private var artwork: ImageView? = null
-    private var lyricsScroll: ScrollView? = null
-    private var lyricsText: TextView? = null
+    private var lyricsList: RecyclerView? = null
+    private val lyricsAdapter = LyricsAdapter()
     private var titleView: TextView? = null
     private var artistView: TextView? = null
     private var formatBadge: TextView? = null
     private var seekbar: SeekBar? = null
+    private var seekHint: TextView? = null
     private var timeElapsed: TextView? = null
     private var timeTotal: TextView? = null
     private var buttonMode: Button? = null
@@ -50,6 +52,8 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
     private var bgJob: Job? = null
 
     private var seeking = false
+    /** 遥控快进/快退中的目标位置（预览用，松手时才提交 seek，避免按住时反复缓冲） */
+    private var pendingSeekMs: Long? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -59,11 +63,11 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
         }
     }
     private var lastArtwork: ByteArray? = null
+    private var artworkCleared = false
 
     // 歌词状态：按当前曲组加载（内嵌优先），行高亮随进度切换；无时间戳则静态平铺
     private var lrcPickcode: String? = null
     private var lyrics: Lyrics? = null
-    private var lrcIndex = -1
     private var lrcJob: Job? = null
 
     private val uiListener = object : Player.Listener {
@@ -75,14 +79,29 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         com.music115.tv.api.ApiLog.record("播放页视图已创建")
         backgroundView = view.findViewById(R.id.player_background)
-        artwork = view.findViewById(R.id.artwork)
-        lyricsScroll = view.findViewById(R.id.lyrics_scroll)
-        lyricsText = view.findViewById(R.id.lyrics_text)
+        artwork = view.findViewById<ImageView>(R.id.artwork).apply {
+            clipToOutline = true // 圆角跟随占位背景的形状
+        }
+        lyricsList = view.findViewById<RecyclerView>(R.id.lyrics_list).apply {
+            layoutManager = LinearLayoutManager(requireContext())
+            adapter = lyricsAdapter
+            itemAnimator = null // 高亮切换自带动画，不要默认的交叉淡入
+            // 上下各留半屏空白，首行/末行也能滚到正中
+            addOnLayoutChangeListener { v, _, top, _, bottom, _, _, _, _ ->
+                val half = (bottom - top) / 2
+                if (v.paddingTop != half) v.setPadding(0, half, 0, half)
+            }
+        }
         titleView = view.findViewById(R.id.track_title)
         artistView = view.findViewById(R.id.track_artist)
         formatBadge = view.findViewById(R.id.format_badge)
+        seekHint = view.findViewById(R.id.seek_hint)
         seekbar = view.findViewById<SeekBar>(R.id.seekbar).apply {
             max = 1000
+            val accent = ContextCompat.getColor(context, R.color.accent)
+            val idle = ContextCompat.getColor(context, R.color.text_secondary)
+            progressTintList = ColorStateList.valueOf(accent)
+            thumbTintList = ColorStateList.valueOf(idle)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) updateTimes(progress)
@@ -90,16 +109,12 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
             })
-            setOnKeyListener { _, keyCode, event ->
-                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { manager.seekBy(-10_000); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { manager.seekBy(10_000); true }
-                    KeyEvent.KEYCODE_DPAD_CENTER -> { manager.togglePlayPause(); true }
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { manager.togglePlayPause(); true }
-                    else -> false
-                }
+            setOnFocusChangeListener { _, hasFocus ->
+                thumbTintList = ColorStateList.valueOf(if (hasFocus) accent else idle)
+                seekHint?.visibility = if (hasFocus) View.VISIBLE else View.INVISIBLE
+                if (!hasFocus) commitPendingSeek()
             }
+            setOnKeyListener { _, keyCode, event -> handleSeekbarKey(keyCode, event) }
         }
         timeElapsed = view.findViewById(R.id.time_elapsed)
         timeTotal = view.findViewById(R.id.time_total)
@@ -132,8 +147,68 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
     override fun onStop() {
         manager.controller?.removeListener(uiListener)
         handler.removeCallbacks(ticker)
+        commitPendingSeek()
         super.onStop()
     }
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        // 每次进入播放页焦点都回到进度条：←→ 直接快进快退，OK 暂停
+        if (!hidden) seekbar?.post { seekbar?.requestFocus() }
+    }
+
+    // ---- 遥控：进度条按键 ----
+
+    private fun handleSeekbarKey(keyCode: Int, event: KeyEvent): Boolean {
+        val dir = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> -1
+            KeyEvent.KEYCODE_DPAD_RIGHT -> 1
+            else -> 0
+        }
+        if (dir != 0) {
+            val c = manager.controller ?: return true
+            val duration = c.duration
+            if (duration <= 0) {
+                // 时长未知（缓冲中）：退化为直接 ±10s
+                if (event.action == KeyEvent.ACTION_DOWN) manager.seekBy(dir * 10_000L)
+                return true
+            }
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    // 单击 10s；按住后每次重复 2s，持续按住提速到 5s（约 40s/秒 → 100s/秒）
+                    val step = when {
+                        event.repeatCount == 0 -> 10_000L
+                        event.repeatCount < 20 -> 2_000L
+                        else -> 5_000L
+                    }
+                    val base = pendingSeekMs ?: c.currentPosition
+                    val target = (base + dir * step).coerceIn(0L, (duration - 1_000L).coerceAtLeast(0L))
+                    pendingSeekMs = target
+                    seeking = true
+                    val progress = (target * 1000 / duration).toInt().coerceIn(0, 1000)
+                    seekbar?.progress = progress
+                    updateTimes(progress)
+                }
+                KeyEvent.ACTION_UP -> commitPendingSeek()
+            }
+            return true
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return false
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { manager.togglePlayPause(); true }
+            else -> false
+        }
+    }
+
+    private fun commitPendingSeek() {
+        pendingSeekMs?.let { manager.seekTo(it) }
+        pendingSeekMs = null
+        seeking = false
+    }
+
+    // ---- 刷新 ----
 
     private fun refreshAll() {
         val c = manager.controller ?: return
@@ -152,57 +227,63 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
         buttonMode?.text = manager.describePlayMode()
         view?.findViewById<Button>(R.id.button_quality)?.text = manager.currentVersionLabel()
 
-        c.mediaMetadata.artworkData?.let { data ->
+        val data = c.mediaMetadata.artworkData
+        if (data != null) {
             // Media3 从音频流自动提取内嵌封面；仅在数据变化时解码
             if (data !== lastArtwork) {
                 lastArtwork = data
+                artworkCleared = false
                 BitmapFactory.decodeByteArray(data, 0, data.size)?.let { bmp ->
                     artwork?.setImageBitmap(bmp)
                     updateBlurredBackground(bmp)
                 }
             }
-        } ?: run {
+        } else if (!artworkCleared) {
+            // 无封面：露出占位图（渐变+音符），背景回到主题渐变
             lastArtwork = null
+            artworkCleared = true
+            bgJob?.cancel()
             artwork?.setImageDrawable(null)
-            backgroundView?.setImageDrawable(null)
+            backgroundView?.setImageResource(R.drawable.bg_player_default)
         }
 
         updateLyrics(c, group)
         updateProgress()
     }
 
-    /** 歌词：曲目变化时拉取（有 lrc 则盖住封面显示），进度变化时高亮滚动 */
+    /** 歌词：曲目变化时拉取，进度变化时只切换高亮行并居中滚动 */
     private fun updateLyrics(c: Player, group: com.music115.tv.data.TrackGroup?) {
-        val pickcode = group?.lrcPickcode
         val key = group?.chosen?.pickcode
         if (key != lrcPickcode) {
             lrcPickcode = key
             lrcJob?.cancel()
             lyrics = null
-            lrcIndex = -1
             if (group == null) {
                 showLyrics(false)
             } else {
-                lyricsText?.text = "歌词加载中…"
+                lyricsAdapter.submit(listOf("歌词加载中…"))
                 showLyrics(true)
                 lrcJob = viewLifecycleOwner.lifecycleScope.launch {
                     val loaded = manager.lrcFor(group)
                     if (lrcPickcode != key) return@launch // 已切歌
                     lyrics = loaded
-                    lrcIndex = -1
                     when {
                         loaded == null -> showLyrics(false)
                         loaded.staticText != null -> {
-                            lyricsText?.text = loaded.staticText
-                            val scroll = lyricsScroll
-                            scroll?.post { scroll.scrollTo(0, 0) }
+                            lyricsAdapter.submit(
+                                loaded.staticText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                            )
+                            lyricsList?.scrollToPosition(0)
                         }
-                        else -> updateLyricsHighlight(c.currentPosition)
+                        else -> {
+                            lyricsAdapter.submit(loaded.syncedLines.orEmpty().map { it.text })
+                            updateLyricsHighlight(c.currentPosition, jump = true)
+                        }
                     }
                 }
             }
         } else if (lyrics?.syncedLines != null) {
-            updateLyricsHighlight(c.currentPosition)
+            updateLyricsHighlight(c.currentPosition, jump = false)
         }
     }
 
@@ -226,39 +307,25 @@ class PlayerFragment : Fragment(R.layout.fragment_player) {
 
     private fun showLyrics(show: Boolean) {
         // 左封面/右歌词同屏：封面常驻，只切换歌词面板（无歌词时封面自动居中）
-        lyricsScroll?.visibility = if (show) View.VISIBLE else View.GONE
+        lyricsList?.visibility = if (show) View.VISIBLE else View.GONE
     }
 
-    private fun updateLyricsHighlight(positionMs: Long) {
+    /** @param jump true = 刚加载/切歌，直接定位不做平滑滚动 */
+    private fun updateLyricsHighlight(positionMs: Long, jump: Boolean) {
         val lines = lyrics?.syncedLines ?: return
         var idx = lines.indexOfLast { it.timeMs <= positionMs }
         if (idx == -1) idx = 0
-        if (idx == lrcIndex) return
-        lrcIndex = idx
-
-        val context = context ?: return
-        val accent = ContextCompat.getColor(context, R.color.accent)
-        val sb = SpannableStringBuilder()
-        lines.forEachIndexed { i, line ->
-            if (i > 0) sb.append('\n')
-            val start = sb.length
-            sb.append(line.text)
-            if (i == idx) {
-                sb.setSpan(ForegroundColorSpan(accent), start, sb.length,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(StyleSpan(Typeface.BOLD), start, sb.length,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(RelativeSizeSpan(1.2f), start, sb.length,
-                    SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (idx == lyricsAdapter.current && !jump) return
+        lyricsAdapter.setCurrent(idx)
+        val list = lyricsList ?: return
+        if (jump) {
+            list.post {
+                val lm = list.layoutManager as? LinearLayoutManager ?: return@post
+                // 让当前行大致停在中间（padding 已是半高，偏移 0 即居中附近）
+                lm.scrollToPositionWithOffset(idx, 0)
             }
-        }
-        lyricsText?.text = sb
-        lyricsScroll?.post {
-            val text = lyricsText ?: return@post
-            val scroll = lyricsScroll ?: return@post
-            if (text.layout == null || idx >= text.layout.lineCount) return@post
-            val target = text.layout.getLineTop(idx) - scroll.height / 3
-            scroll.smoothScrollTo(0, target.coerceAtLeast(0))
+        } else {
+            LyricsAdapter.scrollToCenter(list, idx)
         }
     }
 

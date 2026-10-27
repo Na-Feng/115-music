@@ -3,12 +3,13 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <!-- 封面高斯模糊背景 + 暗罩（保证前景文字可读） -->
+    <!-- 封面高斯模糊背景 + 暗罩（保证前景文字可读）；无封面时用主题渐变兜底 -->
     <ImageView
         android:id="@+id/player_background"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:scaleType="centerCrop"
+        android:src="@drawable/bg_player_default"
         android:contentDescription="模糊封面背景" />
 
     <View
@@ -75,44 +76,43 @@
             android:gravity="center"
             android:clipChildren="false">
 
+            <!-- 背景为占位图（渐变+音符），有内嵌封面时 src 盖住它 -->
             <ImageView
                 android:id="@+id/artwork"
                 android:layout_width="300dp"
                 android:layout_height="300dp"
                 android:scaleType="centerCrop"
-                android:background="@color/surface"
+                android:background="@drawable/artwork_placeholder"
                 android:contentDescription="专辑封面" />
 
-            <ScrollView
-                android:id="@+id/lyrics_scroll"
+            <!-- 歌词：一行一项，只重绘当前行；当前行居中放大，上下边缘渐隐 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/lyrics_list"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:layout_marginStart="28dp"
-                android:background="#E6171921"
-                android:visibility="gone"
+                android:layout_marginStart="40dp"
+                android:clipToPadding="false"
                 android:focusable="false"
-                android:fillViewport="true">
-
-                <TextView
-                    android:id="@+id/lyrics_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:padding="20dp"
-                    android:textSize="18sp"
-                    android:lineSpacingExtra="8dp"
-                    android:textColor="@color/text_secondary" />
-            </ScrollView>
+                android:focusableInTouchMode="false"
+                android:descendantFocusability="blocksDescendants"
+                android:overScrollMode="never"
+                android:requiresFadingEdge="vertical"
+                android:fadingEdgeLength="96dp"
+                android:visibility="gone" />
         </LinearLayout>
 
-        <!-- 底部：进度条 + 控制 -->
+        <!-- 底部：进度条（默认焦点：←→ 快退/快进，按住加速；OK 播放/暂停；↓ 进入按钮行） -->
         <SeekBar
             android:id="@+id/seekbar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:focusable="true"
             android:nextFocusUp="@+id/button_play_pause"
-            android:nextFocusDown="@+id/button_play_pause" />
+            android:nextFocusDown="@+id/button_play_pause">
+
+            <requestFocus />
+        </SeekBar>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -128,9 +128,20 @@
                 android:textColor="@color/text_secondary" />
 
             <TextView
-                android:id="@+id/time_total"
+                android:id="@+id/seek_hint"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:text="◀ ▶ 快退/快进（按住加速）　OK 暂停/播放　▼ 更多"
+                android:textSize="14sp"
+                android:textColor="@color/text_secondary"
+                android:visibility="invisible" />
+
+            <TextView
+                android:id="@+id/time_total"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="end"
                 android:textSize="15sp"
                 android:textColor="@color/text_secondary" />
         </LinearLayout>
@@ -161,11 +172,7 @@
                 android:src="@drawable/ic_play"
                 android:background="@drawable/bg_list_item"
                 android:nextFocusUp="@id/seekbar"
-                android:nextFocusDown="@id/seekbar"
-                android:contentDescription="播放/暂停">
-
-                <requestFocus />
-            </ImageButton>
+                android:contentDescription="播放/暂停" />
 
             <ImageButton
                 android:id="@+id/button_next"

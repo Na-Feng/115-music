@@ -162,7 +162,6 @@ class MainActivity : AppCompatActivity(), MainHost {
 
         listOf(
             R.string.tab_category to 0,
-            R.string.tab_folder to 1,
             R.string.tab_search to 2,
             R.string.tab_settings to 3,
             R.string.tab_log to 4,

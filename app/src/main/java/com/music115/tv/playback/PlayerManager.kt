@@ -99,7 +99,9 @@ class PlayerManager(
                     ?: return@withContext null
                 val text = locator.okHttpClient.newCall(Request.Builder().url(url).build())
                     .execute().use { resp ->
-                        if (!resp.isSuccessful) null else resp.body?.string()
+                        // 不用 body.string()：它默认按 UTF-8 解码，GBK 歌词会变成「�」方块
+                        if (!resp.isSuccessful) null
+                        else resp.body?.bytes()?.let { com.music115.tv.data.TextDecoder.decode(it) }
                     } ?: return@withContext null
                 val parsed = LrcParser.parse(text)
                 if (parsed.isEmpty()) null else {
@@ -501,5 +503,13 @@ class PlayerManager(
 
     private fun notifyUi() {
         onUiChanged?.invoke()
+        uiListeners.toList().forEach { it() }
     }
+
+    /** 额外的 UI 监听（列表页用来高亮正在播放的歌曲）；均在主线程回调 */
+    private val uiListeners = LinkedHashSet<() -> Unit>()
+
+    fun addUiListener(l: () -> Unit) { uiListeners.add(l) }
+
+    fun removeUiListener(l: () -> Unit) { uiListeners.remove(l) }
 }

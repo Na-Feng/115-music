@@ -1,6 +1,7 @@
 package com.music115.tv.playback
 
 import com.music115.tv.ServiceLocator
+import com.music115.tv.data.TextDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -119,17 +120,11 @@ object EmbeddedLyrics {
         val text = when (enc) {
             1 -> runCatching { String(textBytes, Charsets.UTF_16) }.getOrNull()
             2 -> runCatching { String(textBytes, Charsets.UTF_16BE) }.getOrNull()
-            3 -> String(textBytes, Charsets.UTF_8)
-            // 编码 0 名义上是 ISO-8859-1，但中文文件的 USLT 实际常用 GBK 存储
-            else -> {
-                val pureAscii = textBytes.all { it.toInt() in 0..127 }
-                runCatching {
-                    if (pureAscii) String(textBytes, Charsets.ISO_8859_1)
-                    else String(textBytes, charset("GBK"))
-                }.getOrNull() ?: String(textBytes, Charsets.ISO_8859_1)
-            }
+            // 编码 3 名义 UTF-8、编码 0 名义 ISO-8859-1，但中文文件实际常是 GBK 或 UTF-8 混标，
+            // 统一自动识别（合法 UTF-8 优先，否则 GBK）
+            else -> TextDecoder.decode(textBytes)
         } ?: return null
-        return text.trim().takeIf { it.isNotEmpty() }
+        return text.trim('\u0000', ' ', '\n', '\r', '\t', '\uFEFF').takeIf { it.isNotEmpty() }
     }
 
     // ---- FLAC Vorbis 注释 ----
@@ -173,7 +168,8 @@ object EmbeddedLyrics {
         for (i in 0 until count) {
             val cl = le32()
             if (cl < 0 || p + cl > end) return best
-            val comment = String(data, p, cl, Charsets.UTF_8)
+            // 规范要求 UTF-8，但部分工具写入的是 GBK，自动识别
+            val comment = TextDecoder.decode(data, p, cl)
             p += cl
             val eq = comment.indexOf('=')
             if (eq > 0) {

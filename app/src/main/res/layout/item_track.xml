@@ -9,6 +9,17 @@
     android:paddingEnd="16dp"
     android:focusable="true">
 
+    <!-- 正在播放指示（均衡器图标，播放中呼吸闪烁） -->
+    <ImageView
+        android:id="@+id/playing_icon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginEnd="12dp"
+        android:src="@drawable/ic_playing"
+        android:tint="@color/accent"
+        android:visibility="gone"
+        android:contentDescription="正在播放" />
+
     <TextView
         android:id="@+id/badge"
         android:layout_width="52dp"

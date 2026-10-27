@@ -63,6 +63,10 @@ abstract class ListBaseFragment : Fragment() {
         savedInstanceState: android.os.Bundle?,
     ): View = inflater.inflate(layoutId, container, false)
 
+    private val playerListener = {
+        updatePlayingIndicator()
+    }
+
     override fun onViewCreated(view: View, savedInstanceState: android.os.Bundle?) {
         adapter = TrackListAdapter(
             onFolderClick = { folder, _ -> onFolderClicked(folder) },
@@ -77,6 +81,22 @@ abstract class ListBaseFragment : Fragment() {
         view.findViewById<Button>(R.id.retry_button).setOnClickListener { loadInitial(refresh = true) }
         onBaseViewCreated(view)
         loadInitial()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        locator.playerManager.addUiListener(playerListener)
+        updatePlayingIndicator()
+    }
+
+    override fun onStop() {
+        locator.playerManager.removeUiListener(playerListener)
+        super.onStop()
+    }
+
+    private fun updatePlayingIndicator() {
+        val pm = locator.playerManager
+        adapter.setPlaying(pm.currentGroup(), pm.isPlaying())
     }
 
     fun loadInitial(refresh: Boolean = false) {
@@ -106,6 +126,7 @@ abstract class ListBaseFragment : Fragment() {
                     showError("列表为空（服务端 count=${listing.total}）——可点「重试」再试")
                 } else {
                     setState(recyclerVisible = true)
+                    updatePlayingIndicator()
                 }
             } catch (e: SessionExpiredException) {
                 ApiLog.record("页面[$pageTag] 会话过期(990001)")

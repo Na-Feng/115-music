@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 无内嵌封面时的占位：主题色渐变圆角底 + 居中音符 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="@color/accent_deep"
+                android:endColor="@color/surface" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item
+        android:width="120dp"
+        android:height="120dp"
+        android:gravity="center"
+        android:drawable="@drawable/ic_note_placeholder" />
+</layer-list>
