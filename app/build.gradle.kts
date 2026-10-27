@@ -12,8 +12,8 @@ android {
         applicationId = "com.music115.tv"
         minSdk = 23
         targetSdk = 35
-        versionCode = 39
-        versionName = "0.4.8"
+        versionCode = 40
+        versionName = "0.4.9"
     }
 
     buildTypes {

@@ -37,12 +37,20 @@ class One15DataSource(private val locator: ServiceLocator) : BaseDataSource(fals
     }
 
     private fun openResolved(spec: DataSpec, pickcode: String, retry: Boolean): Long {
-        // DataSource.open 运行在 ExoPlayer 加载线程，阻塞解析可接受
-        val url = runBlocking { locator.downloadUrlResolver.resolve(pickcode) }
+        // DataSource.open 运行在 ExoPlayer 加载线程，阻塞解析可接受。
+        // 解析失败包装为 IOException：ExoPlayer 只对 IOException 走加载重试，其他异常会直接终止播放
+        val url = try {
+            runBlocking { locator.downloadUrlResolver.resolve(pickcode) }
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Exception) {
+            throw IOException("解析播放直链失败: ${e.message}", e)
+        }
         return try {
             openUpstream(spec.buildUpon().setUri(Uri.parse(url)).build())
         } catch (e: InvalidResponseCodeException) {
-            if (e.responseCode == 403 && retry) {
+            // 直链过期时 CDN 不一定回 403（也见过 401/404/410 等），4xx 一律换新直链重试一次
+            if (e.responseCode in 400..499 && e.responseCode != 416 && retry) {
                 locator.downloadUrlResolver.invalidate(pickcode)
                 openResolved(spec, pickcode, retry = false)
             } else {

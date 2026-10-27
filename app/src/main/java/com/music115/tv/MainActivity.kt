@@ -87,11 +87,16 @@ class MainActivity : AppCompatActivity(), MainHost {
         buildController()
     }
 
-    override fun onStop() {
+    /**
+     * 控制器只在 Activity 销毁时释放，onStop 时不释放：电视进入屏保/按 Home 键都会触发 onStop，
+     * 若此时断开，PlayerManager 的补队列（连播扩展）与出错重试全部失效，
+     * 表现为「顺序播放播几首就停」「单曲循环遇到一次链接失效就停」。
+     */
+    override fun onDestroy() {
         manager.detach()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
-        super.onStop()
+        super.onDestroy()
     }
 
     // ---- MediaController 生命周期 ----

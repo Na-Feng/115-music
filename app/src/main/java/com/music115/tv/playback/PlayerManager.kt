@@ -418,12 +418,13 @@ class PlayerManager(
 
     private fun handleError(error: PlaybackException) {
         val c = controller ?: return
+        ApiLog.record("播放出错 ${error.errorCode}(${error.errorCodeName}): ${error.message} / ${error.cause?.javaClass?.simpleName}: ${error.cause?.message}")
         val pickcode = c.currentMediaItem?.mediaId ?: return
-        val group = groupsById[pickcode] ?: return
+        val group = groupsById[pickcode]
 
         // 5000–5999 为 PlaybackException 文档定义的解码/初始化/格式不支持类错误
         val decodingFailure = error.errorCode in 5000..5999
-        if (decodingFailure && group.chosen.ext != "mp3") {
+        if (group != null && decodingFailure && group.chosen.ext != "mp3") {
             bannedExts.add(group.chosen.ext)
             val alt = group.versions.firstOrNull { it.ext !in bannedExts }
             if (alt != null) {
@@ -438,23 +439,39 @@ class PlayerManager(
             }
         }
 
+        // 直链可能已过期/失效：丢弃缓存，重试时会重新解析
+        locator.downloadUrlResolver.invalidate(pickcode)
+        consecutiveErrors++
+
         // 网络/HTTP 类错误（2000–2999，含 CDN 403）：可能整条会话都失效了。
         // 连续 3 次不再傻跳队列 —— 暂停播放并走与 990001 相同的恢复链（WafRefresher/重登）。
-        if (error.errorCode in 2000..2999) {
-            consecutiveErrors++
-            if (consecutiveErrors >= 3) {
-                consecutiveErrors = 0
-                c.pause()
-                onFallback?.invoke("连续播放失败，已暂停并尝试刷新登录状态")
-                locator.cookieRepository.sessionState.value = SessionState.EXPIRED
-                return
-            }
+        if (error.errorCode in 2000..2999 && consecutiveErrors >= 3) {
+            consecutiveErrors = 0
+            c.pause()
+            onFallback?.invoke("连续播放失败，已暂停并尝试刷新登录状态")
+            locator.cookieRepository.sessionState.value = SessionState.EXPIRED
+            return
         }
-        // 兜底：跳下一曲，避免整队卡死
+
+        // 非解码类错误先原地重试当前曲（换新直链，从出错位置续播）：
+        // 偶发的链接过期/网络抖动不应导致播放停止（单曲循环尤其如此）
+        if (!decodingFailure && consecutiveErrors <= 2) {
+            ApiLog.record("重试当前曲（第 $consecutiveErrors 次）")
+            val index = c.currentMediaItemIndex
+            val position = c.currentPosition.coerceAtLeast(0)
+            c.prepare()
+            c.seekTo(index, position)
+            c.play()
+            return
+        }
+
+        // 兜底：跳下一曲，避免整队卡死（队尾时交给 next() 向扩展器取歌）
+        c.prepare()
         if (c.hasNextMediaItem()) {
             c.seekToNextMediaItem()
-            c.prepare()
             c.play()
+        } else {
+            next()
         }
     }
 
